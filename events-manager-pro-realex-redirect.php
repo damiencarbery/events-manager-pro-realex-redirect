@@ -27,7 +27,6 @@ class EM_Pro_Realex_Redirect {
 	function init() {
 		// Deactivate this plugin if Events Manager Pro is not active (it provides the EM_Gateway class.
 		if ( ! class_exists( 'EM_Gateway' ) ) {
-			error_log( "EM_Gateway class is not available." );
 			deactivate_plugins(plugin_basename(__FILE__));
 			add_action( 'admin_notices', array(&$this,'not_activated_error_notice') );
 			return;
