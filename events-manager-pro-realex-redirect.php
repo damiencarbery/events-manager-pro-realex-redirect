@@ -3,7 +3,7 @@
 Plugin Name: Events Manager Pro - RealEx Redirect Gateway
 Plugin URI: http://wp-events-plugin.com
 Description: RealEx Redirect gateway pluging for Events Manager Pro
-Version: 1.2
+Version: 1.3
 Depends: Events Manager Pro
 Author: Andy Place
 Author URI: http://www.andyplace.co.uk
@@ -13,8 +13,8 @@ include_once( ABSPATH . 'wp-admin/includes/plugin.php' );
 
 class EM_Pro_Realex_Redirect {
 
-	function EM_Pro_Realex_Redirect() {
-		global $wpdb;
+	public function __construct() {
+		//global $wpdb;
 
 		// Some rewite pre-requesits
 		add_action('init', array(&$this,'rewrite_init') );
@@ -25,6 +25,14 @@ class EM_Pro_Realex_Redirect {
 	}
 
 	function init() {
+		// Deactivate this plugin if Events Manager Pro is not active (it provides the EM_Gateway class.
+		if ( ! class_exists( 'EM_Gateway' ) ) {
+			error_log( "EM_Gateway class is not available." );
+			deactivate_plugins(plugin_basename(__FILE__));
+			add_action( 'admin_notices', array(&$this,'not_activated_error_notice') );
+			return;
+		}
+
 		if( is_plugin_active('events-manager/events-manager.php') && is_plugin_active('events-manager-pro/events-manager-pro.php') ) {
 			//add-ons
 			include('add-ons/gateways/gateway.realex.redirect.php');
