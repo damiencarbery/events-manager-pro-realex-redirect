@@ -7,6 +7,7 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 	var $status_txt = 'Awaiting RealEx Payment';
 	var $button_enabled = true;
 	var $payment_return = true;
+	var $supports_multiple_bookings = true;
 
 	/**
 	 * Sets up gateaway and adds relevant actions/filters
@@ -18,7 +19,7 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 			//Booking Interception
 			if ( absint(get_option('em_'.$this->gateway.'_booking_timeout')) > 0 ){
 				//Modify spaces calculations only if bookings are set to time out, in case pending spaces are set to be reserved.
-				add_filter('em_bookings_get_pending_spaces', array(&$this, 'em_bookings_get_pending_spaces'),1,2);
+				add_filter('em_bookings_get_pending_spaces', array(&$this, 'em_bookings_get_pending_spaces'),1,3);
 			}
 			add_action('em_gateway_js', array(&$this,'em_gateway_js'));
 			//Gateway-Specific
@@ -51,7 +52,7 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 	 * @param EM_Bookings $EM_Bookings
 	 * @return integer
 	 */
-	function em_bookings_get_pending_spaces($count, $EM_Bookings){
+	function em_bookings_get_pending_spaces($count, $EM_Bookings, $force_refresh = false){
 		foreach($EM_Bookings->bookings as $EM_Booking){
 			if($EM_Booking->booking_status == $this->status && $this->uses_gateway($EM_Booking)){
 				$count += $EM_Booking->get_spaces();
@@ -152,19 +153,22 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 
 		$orderid = $EM_Booking->booking_id."-".$timestamp."-".mt_rand(1, 999);
 
-		$curr = get_option('dbem_bookings_currency', 'GBP');
+		$curr = get_option('dbem_bookings_currency', 'EUR');
 
 		// The amount should be in the smallest unit of the required currency (i.e. 2000 = £20, $20 or €20)
         $amount     = $EM_Booking->get_price(false, false, true) * 100;
 
 		/*
-		Below is the code for creating the digital signature using the MD5 algorithm provided
+		Below is the code for creating the digital signature using the SHA1 algorithm provided
 		by PHP. you can use the SHA1 algorithm alternatively.
 		*/
 		$tmp = "$timestamp.$merchantid.$orderid.$amount.$curr";
-		$md5hash = md5($tmp);
-		$tmp = "$md5hash.$secret";
-		$md5hash = md5($tmp);
+		//$tmp = sprintf( '%d.%s.%s.%d.%s', $timestamp, $merchantid, $orderid, $amount, $curr );
+		error_log( 'First: ' . $tmp );
+		$sha1hash = sha1($tmp);
+		$tmp = "$sha1hash.$secret";
+		$sha1hash = sha1($tmp);
+		error_log( 'sha1hash: ' . $sha1hash );
 
 		$comment = "Booking #".$EM_Booking->booking_id." - ".
 			$EM_Booking->booking_spaces. " space(s) for ".
@@ -176,12 +180,13 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 			"CURRENCY" => $curr,
 			"AMOUNT" => $amount,
 			"TIMESTAMP" => $timestamp,
-			"MD5HASH" => $md5hash,
+			"SHA1HASH" => $sha1hash,
 			"AUTO_SETTLE_FLAG" => "1",
 			"CUST_NUM" => $EM_Booking->person_id,
 			"COMMENT1" => "Events Manager Booking from ".get_site_url(),
 			"COMMENT2" => $comment,
-			"PROD_ID" => $EM_Booking->event_id
+			"PROD_ID" => $EM_Booking->event_id,
+			"MERCHANT_RESPONSE_URL" => $this->get_payment_return_url(),
 		);
 
 		$sub_acc = get_option('em_'. $this->gateway . "_account" );
@@ -193,19 +198,11 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 	}
 
 	function get_redirect_url(){
-		return "https://epage.payandshop.com/epage.cgi";
-	}
-
-	/*
-	 * Overide parent return url with value for rewrite rule defined in gateway.realex.redirect.php
-	 * Can be removed if RealEx sort out their return URL issues
-	 */
-	function get_payment_return_url() {
-		return get_site_url()."/realex-redirect-return";
+		return 'https://hpp.sandbox.realexpayments.com/pay';
 	}
 
 	function say_thanks(){
-		if( $_REQUEST['thanks'] == 1 ){
+		if( isset( $_REQUEST['thanks'] )  && $_REQUEST['thanks'] == 1 ){
 			echo "<div class='em-booking-message em-booking-message-success'>".get_option('em_'.$this->gateway.'_booking_feedback_thanks').'</div>';
 		}
 	}
@@ -263,23 +260,23 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 		$message = $_POST['MESSAGE'];
 		$authcode = $_POST['AUTHCODE'];
 		$pasref = $_POST['PASREF'];
-		$realexmd5 = $_POST['MD5HASH'];
+		$realexsha1 = $_POST['SHA1HASH'];
 
 		$merchantid = get_option('em_'. $this->gateway . "_merchant_id" );
 		$secret     = get_option('em_'. $this->gateway . "_shared_secret" );
 		$currency 	= get_option('dbem_bookings_currency', 'GBP');
 
 		//---------------------------------------------------------------
-		//Below is the code for creating the digital signature using the md5 algorithm.
+		//Below is the code for creating the digital signature using the sha1 algorithm.
 		//This digital siganture should correspond to the
 		//one Realex Payments POSTs back to this script and can therefore be used to verify the message Realex sends back.
 		$tmp = "$timestamp.$merchantid.$orderid.$result.$message.$pasref.$authcode";
-		$md5hash = md5($tmp);
-		$tmp = "$md5hash.$secret";
-		$md5hash = md5($tmp);
+		$sha1hash = sha1($tmp);
+		$tmp = "$sha1hash.$secret";
+		$sha1hash = sha1($tmp);
 
 		//Check to see if hashes match or not
-		if ($md5hash != $realexmd5) {
+		if ($sha1hash != $realexsha1) {
 			echo "RealEx Response Error: hashes don't match - response not authenticated!";
 			echo '<p><a href="'.get_site_url().'">'.__('Continue', 'emp-pro').'</a>';
 			exit;
@@ -298,14 +295,15 @@ class EM_Gateway_Realex_Redirect extends EM_Gateway {
 		and placed in the template again. It is placed wherever the comment "<!--E-PAGE TABLE HERE-->"
 		is in the template you provide. This is the case so that from a customer's perspective, they are not suddenly removed from
 		a secure site to an unsecure site. This means that although we call this response script the
-		customer is still on Realex PAyemnt's site and therefore it is recommended that a HTML link is
-		printed in order to redirect the customrer back to the merchants site.
+		customer is still on Realex Payment's site and therefore it is recommended that a HTML link is
+		printed in order to redirect the customer back to the merchant's site.
 		*/
 
 
 		// Load Booking
 		$orderid = substr( $orderid, 0, strpos($orderid, '-') );
-		$EM_Booking = new EM_Booking( $orderid );
+		// Change to em_get_booking() to support multiple bookings (https://wp-events-plugin.com/documentation/multiple-booking-mode/)
+		$EM_Booking = em_get_booking( $orderid );
 
 		if( !empty($EM_Booking->booking_id) ){
 
@@ -503,7 +501,7 @@ Events Manager
 				$this->gateway . "_booking_feedback_thanks" => wp_kses_data($_REQUEST[ 'booking_feedback_thanks' ]),
 				$this->gateway . "_booking_feedback_fail" => wp_kses_data($_REQUEST[ 'booking_feedback_fail' ]),
 				$this->gateway . "_booking_feedback" => wp_kses_data($_REQUEST[ 'booking_feedback' ]),
-				$this->gateway . "_manual_approval" => $_REQUEST[ 'manual_approval' ],
+				$this->gateway . "_manual_approval" => isset( $_REQUEST[ 'manual_approval' ] ) ? $_REQUEST[ 'manual_approval' ] : false,
 				$this->gateway . "_booking_timeout" => $_REQUEST[ 'booking_timeout' ],
 			);
 			foreach($gateway_options as $key=>$option){
